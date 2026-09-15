@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import admin from '../api/admin.js';
+import content from '../api/content.js';
+import lead from '../api/lead.js';
+import {validateContent} from '../lib/backend.js';
+const original=global.fetch;
+Object.assign(process.env,{SUPABASE_URL:'https://unit.invalid',SUPABASE_SECRET_KEY:'test-secret',SUPABASE_PUBLISHABLE_KEY:'test-public',ADMIN_USER_ID:'owner-id',WEB3FORMS_ACCESS_KEY:'test-email'});
+function response(){return {statusCode:200,headers:{},setHeader(k,v){this.headers[k]=v;},status(n){this.statusCode=n;return this;},json(d){this.body=d;return this;}};}
+function request(action,method='GET',body={},signed=true){return {query:{action},method,body,headers:{host:'nexa.test',origin:'https://nexa.test',...(signed?{cookie:'nl_session=valid-token'}:{})},socket:{remoteAddress:'127.0.0.1'}};}
+const json=d=>new Response(JSON.stringify(d),{status:200});
+test('unauthenticated lead reads are denied without querying database',async()=>{let called=false;global.fetch=async()=>{called=true;};const r=response();await admin(request('leads','GET',{},false),r);assert.equal(r.statusCode,401);assert.equal(called,false);});
+test('authenticated non-owner is denied',async()=>{global.fetch=async()=>json({id:'other-user'});const r=response();await admin(request('leads'),r);assert.equal(r.statusCode,401);});
+test('cross-origin changes are denied before auth',async()=>{const req=request('content','POST');req.headers.origin='https://attacker.test';const r=response();await admin(req,r);assert.equal(r.statusCode,403);});
+test('owner saves with optimistic version check',async()=>{let patched;global.fetch=async(url,opts)=>{if(url.endsWith('/user'))return json({id:'owner-id'});patched={url,body:JSON.parse(opts.body)};return json([{...patched.body,key:'testimonials'}]);};const r=response();await admin(request('content','POST',{key:'testimonials',version:0,items:[{id:'a',name:'Approved client',company:'',quote:'Real approved feedback'}]}),r);assert.equal(r.statusCode,200);assert.match(patched.url,/version=eq.0/);assert.equal(patched.body.version,1);});
+test('stale saves return a conflict',async()=>{global.fetch=async url=>json(url.endsWith('/user')?{id:'owner-id'}:[]);const r=response();await admin(request('content','POST',{key:'testimonials',version:3,items:[]}),r);assert.equal(r.statusCode,409);});
+test('media validation rejects script and protocol-relative URLs',()=>{for(const image of ['javascript:alert(1)','//evil.test/img'])assert.throws(()=>validateContent('portfolio',[{id:'p',title:'Work',industry:'WEBSITES',service:'Web',description:'',image,tags:[]}]))});
+test('public content returns content only and preserves intentionally empty arrays',async()=>{let endpoint;global.fetch=async url=>{endpoint=url;return json([{key:'portfolio',items:[]},{key:'services',items:null}]);};const r=response();await content({method:'GET'},r);assert.deepEqual(r.body,{portfolio:[]});assert.match(endpoint,/nl_content/);assert.doesNotMatch(endpoint,/nl_leads/);});
+test('login issues HttpOnly Secure SameSite cookie only for owner',async()=>{global.fetch=async url=>url.includes('rpc')?json(true):json({user:{id:'owner-id',email:'owner@example.test'},access_token:'token',expires_in:3600});const r=response();await admin(request('login','POST',{email:'owner@example.test',password:'testpassword'},false),r);assert.equal(r.statusCode,200);assert.match(r.headers['Set-Cookie'],/HttpOnly; Secure; SameSite=Strict/);assert.equal(r.body.access_token,undefined);});
+test('saved enquiry succeeds even when email provider is down',async()=>{let stored;global.fetch=async(url,opts)=>{if(url.includes('rpc'))return json(true);if(url.includes('nl_leads')){stored=JSON.parse(opts.body);return new Response('',{status:201});}throw new Error('Email down');};const r=response();await lead(request('', 'POST',{fullName:'Test enquiry',phoneNumber:'9999999999',email:'',brandName:'',service:'Website Development',budgetRange:'Not sure / Discuss first',startTime:'THIS MONTH',message:'Please send website details',formStartedAt:Date.now()-5000}),r);assert.equal(r.statusCode,200);assert.equal(r.body.ok,true);assert.equal(stored.full_name,'Test enquiry');});
+test.after(()=>{global.fetch=original;});
