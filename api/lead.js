@@ -1,4 +1,4 @@
-import {configured, sb} from '../lib/backend.js';
+import {serverConfigured, sb} from '../lib/backend.js';
 import crypto from 'node:crypto';
 
 const RATE_WINDOW_MS = 10 * 60 * 1000;
@@ -103,17 +103,18 @@ export default async function handler(req, res) {
     });
   }
 
-  if(configured()) {
+  if(serverConfigured()) {
     try {
       const bucket = crypto.createHmac('sha256',process.env.SUPABASE_SECRET_KEY).update('lead:'+ip).digest('hex');
       const allowed = await sb('/rest/v1/rpc/nl_accept_attempt',{method:'POST',body:JSON.stringify({bucket})});
       if(!allowed) return res.status(429).json({ok:false,message:'Too many enquiries. Please try again in ten minutes.'});
-    } catch {return res.status(503).json({ok:false,message:'Enquiries temporarily unavailable. Please use WhatsApp.'});}
+    } catch (error) {
+      console.warn('Lead database rate-limit check failed; continuing with local rate limit.', error?.status || error?.message || 'unknown');
+    }
   }
 
   const body = req.body && typeof req.body === 'object' ? req.body : {};
 
-  // Honeypot: bots often fill hidden website fields. Return a generic success without forwarding.
   if (cleanText(body.website, 120)) {
     return res.status(200).json({ ok: true, submissionId: buildTicketId() });
   }
@@ -159,7 +160,7 @@ export default async function handler(req, res) {
   }
 
   const accessKey = process.env.WEB3FORMS_ACCESS_KEY;
-  if (!accessKey && !configured()) {
+  if (!accessKey && !serverConfigured()) {
     return res.status(503).json({
       ok: false,
       message: 'Lead delivery is not configured yet. Please use WhatsApp or call us directly.'
@@ -167,17 +168,17 @@ export default async function handler(req, res) {
   }
 
   const submissionId = buildTicketId();
-  // Persist first: a saved lead stays available even when the email provider is down.
   let stored = false;
-  if (configured()) {
+  if (serverConfigured()) {
     try {
       await sb('/rest/v1/nl_leads', {method:'POST', body:JSON.stringify({ticket_id:submissionId,full_name:fullName,phone:phoneNumber,email,brand:brandName,service,budget:budgetRange,timeline:startTime,message})});
       stored = true;
-    } catch {
-      return res.status(503).json({ok:false,message:'Unable to save your enquiry. Please try again or use WhatsApp.'});
+    } catch (error) {
+      console.error('Lead database save failed.', error?.status || error?.message || 'unknown');
     }
   }
   if (!accessKey && stored) return res.status(200).json({ok:true,submissionId});
+
   const providerPayload = {
     access_key: accessKey,
     subject: `Nexa Loops Lead | ${service} | ${fullName}`,
@@ -204,19 +205,24 @@ export default async function handler(req, res) {
 
     const result = await response.json().catch(() => null);
     if (!response.ok || !result?.success) {
+      console.error('Web3Forms delivery failed.', {
+        status: response.status,
+        message: typeof result?.message === 'string' ? result.message.slice(0, 240) : 'No provider message'
+      });
       if (stored) return res.status(200).json({ok:true,submissionId});
       return res.status(502).json({
         ok: false,
-        message: 'We could not send your enquiry right now. Please use WhatsApp or call us directly.'
+        message: 'We could not save or send your enquiry right now. Please use WhatsApp or call us directly.'
       });
     }
 
     return res.status(200).json({ ok: true, submissionId });
-  } catch {
+  } catch (error) {
+    console.error('Web3Forms request failed.', error?.name || error?.message || 'unknown');
     if (stored) return res.status(200).json({ok:true,submissionId});
     return res.status(502).json({
       ok: false,
-      message: 'We could not send your enquiry right now. Please use WhatsApp or call us directly.'
+      message: 'We could not save or send your enquiry right now. Please use WhatsApp or call us directly.'
     });
   }
 }
