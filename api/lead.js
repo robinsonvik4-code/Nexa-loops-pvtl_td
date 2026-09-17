@@ -1,8 +1,9 @@
-import { serverConfigured, sb } from '../lib/backend.js';
+import { serverConfigured, sb, sameOrigin } from '../lib/backend.js';
 import crypto from 'node:crypto';
 
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT = 5;
+const MAX_BODY_BYTES = 20000;
 const requestsByIp = new Map();
 
 const SERVICE_OPTIONS = new Set([
@@ -66,22 +67,22 @@ const isRateLimited = (ip) => {
   return false;
 };
 
-const isSameOrigin = (req) => {
-  const origin = req.headers.origin;
-  const host = req.headers.host;
-  if (!origin || !host) return true;
-  try {
-    return new URL(origin).host === host;
-  } catch {
-    return false;
-  }
-};
-
 const buildTicketId = () =>
   `NL-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
+const rateBucket = (value) =>
+  crypto.createHmac('sha256', process.env.SUPABASE_SECRET_KEY).update(value).digest('hex');
+
+async function acceptPersistentAttempt(bucket) {
+  return sb('/rest/v1/rpc/nl_accept_attempt', {
+    method:'POST',
+    body:JSON.stringify({bucket})
+  });
+}
+
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
   if (req.method !== 'POST') {
@@ -89,7 +90,12 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, message: 'Method not allowed.' });
   }
 
-  if (!isSameOrigin(req)) {
+  const contentLength = Number(req.headers['content-length'] || 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    return res.status(413).json({ ok: false, message: 'Enquiry is too large.' });
+  }
+
+  if (!sameOrigin(req)) {
     return res.status(403).json({ ok: false, message: 'Request origin is not allowed.' });
   }
 
@@ -103,14 +109,7 @@ export default async function handler(req, res) {
 
   if (serverConfigured()) {
     try {
-      const bucket = crypto
-        .createHmac('sha256', process.env.SUPABASE_SECRET_KEY)
-        .update(`lead:${ip}`)
-        .digest('hex');
-      const allowed = await sb('/rest/v1/rpc/nl_accept_attempt', {
-        method: 'POST',
-        body: JSON.stringify({ bucket })
-      });
+      const allowed = await acceptPersistentAttempt(rateBucket(`lead-ip:${ip}`));
       if (!allowed) {
         return res.status(429).json({
           ok: false,
@@ -119,13 +118,16 @@ export default async function handler(req, res) {
       }
     } catch (error) {
       console.warn(
-        '[lead] database rate-limit check failed; continuing with local rate limit',
+        '[lead] database IP rate-limit check failed; continuing with local rate limit',
         error?.status || error?.message || 'unknown'
       );
     }
   }
 
   const body = req.body && typeof req.body === 'object' ? req.body : {};
+  if (JSON.stringify(body).length > MAX_BODY_BYTES) {
+    return res.status(413).json({ ok: false, message: 'Enquiry is too large.' });
+  }
 
   if (cleanText(body.website, 120)) {
     const blockedId = buildTicketId();
@@ -149,7 +151,7 @@ export default async function handler(req, res) {
 
   const fullName = cleanText(body.fullName, 80);
   const phoneNumber = cleanText(body.phoneNumber, 30);
-  const email = cleanText(body.email, 120);
+  const email = cleanText(body.email, 120).toLowerCase();
   const brandName = cleanText(body.brandName, 100);
   const service = cleanText(body.service, 80);
   const budgetRange = cleanText(body.budgetRange, 80);
@@ -179,6 +181,24 @@ export default async function handler(req, res) {
   }
   if (message.length < 5) {
     return res.status(400).json({ ok: false, message: 'Please add a short project brief.' });
+  }
+
+  if (serverConfigured()) {
+    try {
+      const identity = email ? `email:${email}` : `phone:${phoneDigits}`;
+      const allowed = await acceptPersistentAttempt(rateBucket(`lead-contact:${identity}`));
+      if (!allowed) {
+        return res.status(429).json({
+          ok: false,
+          message: 'Too many enquiries from these contact details. Please wait ten minutes or use WhatsApp.'
+        });
+      }
+    } catch (error) {
+      console.warn(
+        '[lead] contact rate-limit check failed; continuing with IP protection',
+        error?.status || error?.message || 'unknown'
+      );
+    }
   }
 
   const submissionId = buildTicketId();
