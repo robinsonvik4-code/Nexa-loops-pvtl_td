@@ -40,6 +40,7 @@
     <script>
       (() => {
         const nativeFetch = window.fetch.bind(window);
+
         window.fetch = async (input, init) => {
           const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
           const response = await nativeFetch(input, init);
@@ -55,27 +56,39 @@
                   from_name: 'Nexa Loops Website',
                   name: lead.fullName || '',
                   phone: lead.phoneNumber || '',
-                  email: lead.email || '',
                   brand: lead.brandName || '',
                   service: lead.service || '',
                   budget: lead.budgetRange || '',
                   timeline: lead.startTime || '',
                   ticket_id: result.submissionId || '',
                   message: lead.message || '',
-                  website_source: 'Nexa Loops Website'
+                  website_source: 'Nexa Loops Website',
+                  botcheck: false
                 };
 
-                nativeFetch('https://api.web3forms.com/submit', {
+                const visitorEmail = typeof lead.email === 'string' ? lead.email.trim() : '';
+                if (visitorEmail) {
+                  mailPayload.email = visitorEmail;
+                }
+
+                const mailResponse = await nativeFetch('https://api.web3forms.com/submit', {
                   method: 'POST',
-                  headers: {'Content-Type':'application/json','Accept':'application/json'},
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                  },
                   body: JSON.stringify(mailPayload)
-                }).then(async (mailResponse) => {
-                  const mailResult = await mailResponse.json().catch(() => null);
-                  if (!mailResponse.ok || !mailResult?.success) console.warn('Web3Forms notification was not delivered.');
-                }).catch(() => console.warn('Web3Forms notification request failed.'));
+                });
+
+                const mailResult = await mailResponse.json().catch(() => null);
+                if (!mailResponse.ok || !mailResult?.success) {
+                  console.warn('Web3Forms notification failed:', mailResult?.message || mailResult?.body?.message || mailResponse.status);
+                } else {
+                  console.info('Web3Forms notification delivered.');
+                }
               }
-            } catch {
-              // The enquiry is already safely stored in Supabase; email notification is secondary.
+            } catch (error) {
+              console.warn('Web3Forms notification request failed:', error instanceof Error ? error.message : error);
             }
           }
 
