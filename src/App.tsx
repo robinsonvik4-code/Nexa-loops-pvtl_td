@@ -8,6 +8,7 @@ import { Footer } from './components/Footer';
 import { StickyLeadFeatures } from './components/StickyLeadFeatures';
 import { ScrollToTop } from './components/ScrollToTop';
 import { PageTransitionProvider } from './components/PageTransitionOverlay';
+import { SiteMotion } from './components/SiteMotion';
 
 // Dedicated Multi-Page Views
 import { HomePage } from './pages/HomePage';
@@ -31,8 +32,9 @@ function AppLayout() {
   };
 
   return (
-    <div className="min-h-screen bg-[#050814] text-[#E2E8F0] relative selection:bg-[#8B5CF6]/30 selection:text-white flex flex-col justify-between">
+    <div className="min-h-screen bg-[#0B1022] text-[#EAF0FF] relative selection:bg-[#8B5CF6]/30 selection:text-white flex flex-col justify-between">
       <ScrollToTop />
+      <SiteMotion />
 
       {/* Top Fixed Glass Navigation */}
       <Navbar onStartProjectClick={() => navigate('/contact')} />
