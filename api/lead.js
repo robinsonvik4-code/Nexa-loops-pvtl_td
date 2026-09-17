@@ -127,11 +127,11 @@ export default async function handler(req, res) {
 
   const body = req.body && typeof req.body === 'object' ? req.body : {};
 
-  // Honeypot: real visitors should never fill this hidden field.
+  // Honeypot: a real visitor should never fill this field.
   if (cleanText(body.website, 120)) {
     const blockedId = buildTicketId();
     console.warn('[lead] honeypot blocked', { submissionId: blockedId });
-    return res.status(200).json({ ok: true, submissionId: blockedId, forwarded: false });
+    return res.status(200).json({ ok: true, submissionId: blockedId, botBlocked: true });
   }
 
   const formStartedAt = Number(body.formStartedAt || 0);
@@ -182,8 +182,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, message: 'Please add a short project brief.' });
   }
 
-  const accessKey = process.env.WEB3FORMS_ACCESS_KEY;
-  if (!accessKey) {
+  if (!process.env.WEB3FORMS_ACCESS_KEY) {
     console.error('[lead] WEB3FORMS_ACCESS_KEY is missing');
     return res.status(503).json({
       ok: false,
@@ -192,73 +191,8 @@ export default async function handler(req, res) {
   }
 
   const submissionId = buildTicketId();
-  const providerPayload = {
-    access_key: accessKey,
-    subject: `Nexa Loops Lead | ${service} | ${fullName}`,
-    from_name: 'Nexa Loops Website',
-    name: fullName,
-    phone: phoneNumber,
-    brand: brandName || 'Not provided',
-    service,
-    budget: budgetRange,
-    timeline: startTime,
-    ticket_id: submissionId,
-    message,
-    website_source: 'Nexa Loops Website'
-  };
-
-  if (email) providerPayload.email = email;
-
-  console.info('[lead] forwarding to Web3Forms', {
-    submissionId,
-    service,
-    hasEmail: Boolean(email)
-  });
-
-  try {
-    const response = await fetch('https://api.web3forms.com/submit', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json'
-      },
-      body: JSON.stringify(providerPayload),
-      signal: AbortSignal.timeout(10000)
-    });
-
-    const result = await response.json().catch(() => null);
-
-    console.info('[lead] Web3Forms response', {
-      submissionId,
-      status: response.status,
-      success: Boolean(result?.success),
-      providerMessage:
-        typeof result?.message === 'string' ? result.message.slice(0, 180) : 'No message'
-    });
-
-    if (!response.ok || !result?.success) {
-      return res.status(502).json({
-        ok: false,
-        code: 'WEB3FORMS_REJECTED',
-        message:
-          typeof result?.message === 'string'
-            ? `Web3Forms: ${result.message}`
-            : 'We could not send your enquiry right now. Please use WhatsApp or call us directly.'
-      });
-    }
-  } catch (error) {
-    console.error('[lead] Web3Forms request failed', {
-      submissionId,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    });
-    return res.status(502).json({
-      ok: false,
-      code: 'WEB3FORMS_REQUEST_FAILED',
-      message: 'We could not send your enquiry right now. Please use WhatsApp or call us directly.'
-    });
-  }
-
   let stored = false;
+
   if (serverConfigured()) {
     try {
       await sb('/rest/v1/nl_leads', {
@@ -277,18 +211,20 @@ export default async function handler(req, res) {
       });
       stored = true;
     } catch (error) {
-      // Email/Web3Forms delivery already succeeded, so do not turn a delivered lead into a fake failure.
       console.error(
-        '[lead] database save failed after successful Web3Forms delivery',
+        '[lead] database save failed; continuing to browser email delivery',
         error?.status || error?.message || 'unknown'
       );
     }
   }
 
+  // IMPORTANT: Web3Forms expects API submissions to run in the browser unless
+  // the server IP is explicitly safelisted on a paid plan. The browser bridge
+  // intercepts this successful response and performs the Web3Forms request.
   return res.status(200).json({
     ok: true,
     submissionId,
-    forwarded: true,
-    stored
+    stored,
+    deliveryMode: 'browser-web3forms'
   });
 }
