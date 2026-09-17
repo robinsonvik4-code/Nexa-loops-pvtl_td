@@ -36,6 +36,16 @@ const addHidden = (form: HTMLFormElement, name: string, value: string) => {
   form.appendChild(input);
 };
 
+const addWeb3FormsBotcheck = (form: HTMLFormElement) => {
+  const botcheck = document.createElement('input');
+  botcheck.type = 'checkbox';
+  botcheck.name = 'botcheck';
+  botcheck.tabIndex = -1;
+  botcheck.setAttribute('aria-hidden', 'true');
+  botcheck.style.display = 'none';
+  form.appendChild(botcheck);
+};
+
 export const ContactLeadForm: React.FC<ContactLeadFormProps> = ({
   initialService = '',
   initialTimeline = 'AS SOON AS POSSIBLE',
@@ -119,6 +129,7 @@ export const ContactLeadForm: React.FC<ContactLeadFormProps> = ({
     addHidden(nativeForm, 'message', formData.message.trim());
     if (formData.email.trim()) addHidden(nativeForm, 'email', formData.email.trim());
     addHidden(nativeForm, 'redirect', `${window.location.origin}/contact?lead=sent`);
+    addWeb3FormsBotcheck(nativeForm);
 
     sessionStorage.setItem('nexaLeadSuccess', JSON.stringify({ formData, submissionId: ticketId }));
     document.body.appendChild(nativeForm);
@@ -145,6 +156,9 @@ export const ContactLeadForm: React.FC<ContactLeadFormProps> = ({
       const result = await response.json().catch(() => null);
       if (!response.ok || !result?.ok || !result?.submissionId) {
         throw new Error(result?.message || 'Unable to validate your enquiry right now.');
+      }
+      if (result?.botBlocked) {
+        throw new Error('Unable to send your enquiry right now. Please refresh the page and try again.');
       }
 
       submitNativeWeb3Forms(result.submissionId);
@@ -285,7 +299,7 @@ export const ContactLeadForm: React.FC<ContactLeadFormProps> = ({
               )}
 
               <div className="mt-8 pt-6 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4">
-                <span className="text-xs text-gray-400">Secure validation • Native Web3Forms delivery</span>
+                <span className="text-xs text-gray-400">Secure validation • Spam protected • Native Web3Forms delivery</span>
                 <button type="submit" disabled={isSubmitting} className="w-full sm:w-auto px-8 py-4 rounded-xl bg-gradient-to-r from-[#A855F7] via-[#C084FC] to-[#EC4899] text-white font-bold text-xs uppercase tracking-wider disabled:opacity-50 flex items-center justify-center gap-2">
                   {isSubmitting ? <><RefreshCw className="w-4 h-4 animate-spin" /> Sending...</> : <><Send className="w-4 h-4" /> Send Project Enquiry</>}
                 </button>
