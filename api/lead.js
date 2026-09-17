@@ -127,7 +127,6 @@ export default async function handler(req, res) {
 
   const body = req.body && typeof req.body === 'object' ? req.body : {};
 
-  // Honeypot: a real visitor should never fill this field.
   if (cleanText(body.website, 120)) {
     const blockedId = buildTicketId();
     console.warn('[lead] honeypot blocked', { submissionId: blockedId });
@@ -182,14 +181,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, message: 'Please add a short project brief.' });
   }
 
-  if (!process.env.WEB3FORMS_ACCESS_KEY) {
-    console.error('[lead] WEB3FORMS_ACCESS_KEY is missing');
-    return res.status(503).json({
-      ok: false,
-      message: 'Lead email delivery is not configured yet. Please use WhatsApp or call us directly.'
-    });
-  }
-
   const submissionId = buildTicketId();
   let stored = false;
 
@@ -218,9 +209,6 @@ export default async function handler(req, res) {
     }
   }
 
-  // IMPORTANT: Web3Forms expects API submissions to run in the browser unless
-  // the server IP is explicitly safelisted on a paid plan. The browser bridge
-  // intercepts this successful response and performs the Web3Forms request.
   return res.status(200).json({
     ok: true,
     submissionId,
